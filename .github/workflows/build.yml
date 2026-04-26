@@ -1,0 +1,131 @@
+# GitHub Actions workflow configuration
+# For building and testing Rust projects
+
+# Workflow name
+name: build
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# Trigger conditions configuration
+on:
+  # Trigger when pushing to specific branches
+  push:
+    branches:
+      - master # Trigger on master branch push
+    tags:
+      - v* # Trigger on tags starting with v
+  # Trigger when creating pull requests
+  pull_request:
+    branches:
+      - master # Pull requests targeting master branch
+
+# Permissions configuration
+permissions:
+  contents: write # Allow writing content (for releases)
+
+# Job definitions
+jobs:
+  # Rust build job
+  build-rust:
+    # Strategy configuration, supports multi-platform builds
+    strategy:
+      matrix:
+        platform: [ubuntu-latest] # Build platform configuration
+    # Runtime environment
+    runs-on: ${{ matrix.platform }}
+    outputs:
+      release_success: ${{ steps.Release.outcome }}
+    # Step definitions
+    steps:
+      # Step 1: Checkout code
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch complete history
+          submodules: recursive # Recursively checkout submodules
+
+      # Step 2: Install Rust toolchain
+      - name: Install Rust
+        run: rustup toolchain install stable --component llvm-tools-preview
+
+      # Step 3: Install code coverage tool
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # Step 4: Install next-generation test runner
+      - name: install nextest
+        uses: taiki-e/install-action@nextest
+
+      # Step 5: Use Rust cache to speed up builds
+
+      - uses: Swatinem/rust-cache@v2
+      # Step 6: Install Protoc
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v2
+      # Step 7: Check code formatting
+
+      - name: Check code format
+        run: cargo fmt --all -- --check
+
+      # Step 8: Check package for errors
+      - name: Check the package for errors
+        run: cargo check --all
+
+      # Step 9: Code quality check
+      - name: Lint rust sources
+        run: cargo clippy --all-targets --all-features --tests --benches -- -D warnings
+
+      # Step 10: Execute tests
+      - name: Execute rust tests
+        run: cargo nextest run --all-features
+
+      # Step 11: Generate changelog (only executed on tag releases)
+      - name: Generate a changelog
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff
+        if: startsWith(github.ref, 'refs/tags/') # Only execute on tag releases
+        with:
+          config: cliff.toml # Use cliff.toml configuration file
+          args: -vv --latest --strip header # Verbose output, latest version only, strip header
+        env:
+          OUTPUT: CHANGES.md # Output filename
+
+      # Step 12: Release to GitHub Releases (only executed on tag releases)
+      - name: Release
+        id: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/') # Only execute on tag releases
+        with:
+          body: ${{ steps.git-cliff.outputs.content }} # Use generated changelog as release content
+  sync-docs:
+    needs: build-rust
+    if: needs.build-rust.outputs.release_success == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Generate CHANGELOG.md
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff
+        with:
+          config: cliff.toml
+          args: -vv
+        env:
+          OUTPUT: CHANGELOG.md
+
+      - name: Commit & Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git diff --quiet && exit 0
+          git add CHANGELOG.md
+          git commit -m "chore(release): update changelog"
+          git push origin master
