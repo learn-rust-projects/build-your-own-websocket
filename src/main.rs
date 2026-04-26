@@ -4,7 +4,9 @@ use anyhow::{self, Result, bail};
 use base64::{Engine, engine::general_purpose};
 use bytes::{BufMut, BytesMut};
 use ring::digest;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
+};
 #[tokio::main]
 async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
@@ -15,13 +17,14 @@ async fn main() -> Result<()> {
         let mut reader = BufReader::new(read_half);
         let mut writer = BufWriter::new(write_half);
         handshake(&mut reader, &mut writer).await?;
-        handle_connection(&mut reader, &mut writer).await?;
+        send_messages_to_client(&mut reader, &mut writer).await?;
+        receive_messages_from_client(&mut reader, &mut writer).await?;
     }
     println!("server is closed");
 
     Ok(())
 }
-async fn handle_connection<R, W>(_reader: &mut R, writer: &mut W) -> Result<()>
+async fn send_messages_to_client<R, W>(_reader: &mut R, writer: &mut W) -> Result<()>
 where
     R: AsyncBufRead + std::marker::Unpin,
     W: AsyncWrite + std::marker::Unpin,
@@ -41,6 +44,25 @@ where
     writer.flush().await?;
     Ok(())
 }
+
+async fn receive_messages_from_client<R, W>(reader: &mut R, _writer: &mut W) -> Result<()>
+where
+    R: AsyncBufRead + std::marker::Unpin,
+    W: AsyncWrite + std::marker::Unpin,
+{
+    while let Ok(message) = Message::decode(reader).await {
+        match message {
+            Message::Text(text) => {
+                println!("{text}");
+            }
+            Message::Binary(data) => {
+                println!("{data:?}")
+            }
+        }
+    }
+    Ok(())
+}
+
 enum Message {
     Text(String),    // 文本消息
     Binary(Vec<u8>), // 二进制消息
@@ -90,7 +112,49 @@ impl Message {
         frame.extend_from_slice(payload_data);
         frame.to_vec()
     }
+
+    async fn decode<R: AsyncBufRead + std::marker::Unpin>(reader: &mut R) -> Result<Self> {
+        // 1. 读取固定 2 字节头部
+        let mut header = [0u8; 2];
+        reader.read_exact(&mut header).await?;
+
+        // 不考虑 fin 不为 1 的情况，一次读取一个 frame 然后拼接成 message
+        let opcode = header[0] & 0b1111;
+        let mask = header[1] >> 7;
+        if mask != 1 {
+            bail!("mask required");
+        }
+        let mut payload_len = (header[1] & 0b0111_1111) as u64;
+
+        // 2. 处理扩展长度
+        if payload_len == 126 {
+            let mut buf = [0u8; 2];
+            reader.read_exact(&mut buf).await?;
+            payload_len = u16::from_be_bytes(buf) as u64;
+        } else if payload_len == 127 {
+            let mut buf = [0u8; 8];
+            reader.read_exact(&mut buf).await?;
+            payload_len = u64::from_be_bytes(buf);
+        }
+        let mut mask_key = [0; 4];
+        reader.read_exact(&mut mask_key).await?;
+
+        let mut payload_data: Vec<u8> = vec![0; payload_len as usize];
+        reader.read_exact(&mut payload_data).await?;
+        (0..payload_data.len()).for_each(|i| {
+            let j = i % 4;
+            let cur_mask_key = mask_key[j];
+            payload_data[i] ^= cur_mask_key;
+        });
+
+        Ok(if opcode == 1 {
+            Message::Text(String::from_utf8_lossy(&payload_data).to_string())
+        } else {
+            Message::Binary(payload_data)
+        })
+    }
 }
+
 async fn handshake<R, W>(reader: &mut R, writer: &mut W) -> Result<()>
 where
     R: AsyncBufRead + std::marker::Unpin,
