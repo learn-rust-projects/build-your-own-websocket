@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 anyhow = "1.0.102"
 base64 = "0.22.1"
+bytes = "1.11.1"
 ring = "0.17.14"
 tokio = { version = "1.52.1", features = ["rt", "rt-multi-thread", "macros", "net","io-util"] }
 
