@@ -6,6 +6,10 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.102"
+base64 = "0.22.1"
+ring = "0.17.14"
+tokio = { version = "1.52.1", features = ["rt", "rt-multi-thread", "macros", "net","io-util"] }
 
 [package.metadata.release]
 # Message for the commit that prepares the package version
