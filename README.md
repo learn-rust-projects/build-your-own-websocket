@@ -1,6 +1,44 @@
 # build-your-own-websocket
 
-> This project is inspired by <https://github.com/tyr-rust-bootcamp/template>
+## TestJavaScript
+
+```js
+const ws = new WebSocket("ws://localhost:8080/");
+
+// 连接建立成功
+ws.onopen = () => {
+ if (ws.readyState !== WebSocket.OPEN) return;
+
+ ws.send("hello from client side");
+ ws.send("_".repeat(127));
+ ws.send("_".repeat(65536));
+};
+
+// 接收消息
+ws.addEventListener("message", async (ev) => {
+ const data = ev.data;
+
+ // 二进制数据
+ if (data instanceof Blob) {
+  const text = await data.text();
+
+  console.log({
+   messageLength: data.size,
+   messageType: "binary",
+   messageData: text, // 转换后的内容更可读
+  });
+
+  return;
+ }
+
+ // 文本数据
+ console.log({
+  messageLength: data.length,
+  messageType: "text",
+  messageData: data,
+ });
+});
+```
 
 ## Environment Setup
 
